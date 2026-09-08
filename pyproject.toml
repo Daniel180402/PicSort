@@ -32,3 +32,4 @@ picsort = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
