@@ -1,0 +1,85 @@
+# PicSort
+
+A small desktop app for cleaning up large photo collections. Works on macOS and Windows (Linux too).
+
+- **Organizer** – copies or moves photos and videos into `Year/Month` folders and renames them to
+  the time they were taken (`2023-07-15_12-34-56.jpg`). Exact duplicates are skipped automatically.
+- **Visual Cleaner** – finds images that look the same (resized, re-compressed, edited copies),
+  shows them side by side with previews and moves the ones you pick to the trash.
+- **People** *(optional)* – groups photos by the faces in them.
+
+## Requirements
+
+- Python 3.10 or newer **with Tkinter**.
+  - **macOS:** use the installer from [python.org](https://www.python.org/downloads/macos/), which
+    includes Tkinter. The Homebrew `python` formula does not; add it with `brew install python-tk`.
+  - **Windows:** use the installer from [python.org](https://www.python.org/downloads/windows/)
+    and tick *Add Python to PATH*. Tkinter is included by default.
+
+## Install
+
+```bash
+git clone git@github.com:Daniel180402/PicSort.git
+cd PicSort
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Run
+
+| Platform | Double-click              | Terminal              |
+|----------|---------------------------|-----------------------|
+| macOS    | `run_picsort.command`     | `python3 picsort.py`  |
+| Windows  | `run_picsort.bat`         | `python picsort.py`   |
+
+Both launch scripts install the dependencies on first run. `python -m picsort` works as well.
+
+On macOS, Finder may refuse to open `run_picsort.command` the first time. Right-click it, choose
+*Open*, and confirm. If it says the file is not executable, run `chmod +x run_picsort.command` once.
+
+## How the date is determined
+
+For every file the first available source wins:
+
+1. EXIF *DateTimeOriginal* (JPEG, TIFF, HEIC, PNG, WebP, …)
+2. The creation time embedded in MP4 / MOV / M4V / 3GP videos
+3. macOS Spotlight metadata
+4. The earlier of the file's creation and modification time
+
+HEIC photos from iPhones are supported through `pillow-heif`.
+
+## Visual Cleaner tips
+
+- *Sensitivity* is the number of bits two perceptual hashes may differ by. `0` finds only
+  identical-looking images, `5` (default) catches resized and re-compressed copies, higher
+  values find more aggressive edits but also more false positives.
+- *Select All But First in Each Group* keeps the first image of every group and selects the
+  rest, so one click prepares a whole scan for the trash. Check the previews before confirming.
+- Files go to the system trash (via `send2trash`), so mistakes can be undone.
+- Hashes are cached in your user cache folder (`~/Library/Caches/PicSort` on macOS,
+  `%LOCALAPPDATA%\PicSort` on Windows), so re-scanning a folder only processes new or changed files.
+
+## Optional: face recognition
+
+The People tab needs `face_recognition`, which depends on `dlib` and a C++ compiler:
+
+```bash
+pip install -r requirements-faces.txt
+```
+
+- **macOS:** `xcode-select --install` and `brew install cmake` first.
+- **Windows:** install *Visual Studio Build Tools* with the "Desktop development with C++"
+  workload, then run the command above from the *Developer Command Prompt*.
+
+If this fails, everything else keeps working; the tab just explains what is missing.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+The GUI lives in `picsort/gui/`, everything else (`dates.py`, `organizer.py`, `similar.py`,
+`faces.py`) is plain Python without Tk dependencies and is covered by the tests.
