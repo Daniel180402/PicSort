@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+import struct
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PIL import Image
@@ -17,6 +18,8 @@ IMAGE_EXTENSIONS = {
 }
 VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".avi", ".mkv", ".3gp", ".mts", ".wmv"}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+_QUICKTIME_EXTENSIONS = {".mp4", ".m4v", ".mov", ".3gp"}
+_QUICKTIME_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
 
 # EXIF tag ids, see https://exiftool.org/TagNames/EXIF.html
 _TAG_DATETIME_ORIGINAL = 0x9003
@@ -61,6 +64,56 @@ def exif_datetime(path: Path) -> datetime | None:
         return None
 
 
+def _iter_atoms(handle, start: int, end: int):
+    """Yield (type, body_start, body_end) for each ISO-BMFF/QuickTime atom in a range."""
+    position = start
+    while position + 8 <= end:
+        handle.seek(position)
+        header = handle.read(8)
+        if len(header) < 8:
+            return
+        size, kind = struct.unpack(">I4s", header)
+        header_length = 8
+        if size == 1:  # 64-bit size follows
+            size = struct.unpack(">Q", handle.read(8))[0]
+            header_length = 16
+        elif size == 0:  # atom runs to the end of the file
+            size = end - position
+        if size < header_length:
+            return
+        yield kind, position + header_length, position + size
+        position += size
+
+
+def quicktime_datetime(path: Path) -> datetime | None:
+    """Read the creation time stored in MP4/MOV/M4V files (the 'mvhd' atom)."""
+    if path.suffix.lower() not in _QUICKTIME_EXTENSIONS:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            file_end = handle.tell()
+            for kind, body_start, body_end in _iter_atoms(handle, 0, file_end):
+                if kind != b"moov":
+                    continue
+                for child, child_start, _child_end in _iter_atoms(handle, body_start, body_end):
+                    if child != b"mvhd":
+                        continue
+                    handle.seek(child_start)
+                    version = handle.read(4)[0]
+                    raw = handle.read(8 if version == 1 else 4)
+                    created = struct.unpack(">Q" if version == 1 else ">I", raw)[0]
+                    if created == 0:
+                        return None
+                    utc = _QUICKTIME_EPOCH + timedelta(seconds=created)
+                    if utc.year < 1980 or utc > datetime.now(timezone.utc) + timedelta(days=1):
+                        return None
+                    return utc.astimezone().replace(tzinfo=None)
+    except (OSError, struct.error, IndexError, OverflowError):
+        return None
+    return None
+
+
 def spotlight_datetime(path: Path) -> datetime | None:
     """Ask macOS Spotlight for the content creation date (macOS only)."""
     if not IS_MAC:
@@ -95,14 +148,18 @@ def filesystem_datetime(path: Path) -> datetime:
 def get_creation_date(path: str | Path) -> datetime:
     """Return the most trustworthy date available for a media file.
 
-    Order: EXIF, macOS Spotlight, file system timestamps.
+    Order: EXIF (photos), embedded creation time (videos), macOS Spotlight,
+    file system timestamps.
     """
     path = Path(path)
     ext = path.suffix.lower()
+    found = None
     if ext in IMAGE_EXTENSIONS:
         found = exif_datetime(path)
-        if found:
-            return found
+    elif ext in VIDEO_EXTENSIONS:
+        found = quicktime_datetime(path)
+    if found:
+        return found
     found = spotlight_datetime(path)
     if found:
         return found

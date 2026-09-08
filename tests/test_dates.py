@@ -39,3 +39,69 @@ def test_non_image_file_does_not_crash(tmp_path, monkeypatch):
     path = tmp_path / "notes.txt"
     path.write_text("hello")
     assert isinstance(dates.get_creation_date(path), datetime)
+
+
+def _atom(kind: bytes, body: bytes) -> bytes:
+    import struct
+
+    return struct.pack(">I4s", 8 + len(body), kind) + body
+
+
+def _fake_mp4(created_seconds_since_1904: int, version: int = 0) -> bytes:
+    import struct
+
+    if version == 1:
+        mvhd_body = bytes([1, 0, 0, 0]) + struct.pack(">QQ", created_seconds_since_1904, 0) + b"\x00" * 88
+    else:
+        mvhd_body = bytes([0, 0, 0, 0]) + struct.pack(">II", created_seconds_since_1904, 0) + b"\x00" * 88
+    ftyp = _atom(b"ftyp", b"isom\x00\x00\x02\x00isomiso2mp41")
+    mdat = _atom(b"mdat", b"\x00" * 100)  # media data comes before moov, like a phone recording
+    moov = _atom(b"moov", _atom(b"mvhd", mvhd_body))
+    return ftyp + mdat + moov
+
+
+def test_quicktime_datetime_reads_mvhd(tmp_path, monkeypatch):
+    from datetime import timedelta, timezone
+
+    monkeypatch.setattr(dates, "spotlight_datetime", lambda _p: None)
+    when = datetime(2022, 8, 9, 10, 11, 12, tzinfo=timezone.utc)
+    seconds = int((when - datetime(1904, 1, 1, tzinfo=timezone.utc)).total_seconds())
+    expected = when.astimezone().replace(tzinfo=None)
+
+    for version, name in ((0, "clip.mp4"), (1, "clip.mov")):
+        path = tmp_path / name
+        path.write_bytes(_fake_mp4(seconds, version=version))
+        assert dates.quicktime_datetime(path) == expected
+        assert dates.get_creation_date(path) == expected
+
+
+def test_quicktime_datetime_rejects_missing_or_bogus_values(tmp_path):
+    zero = tmp_path / "zero.mp4"
+    zero.write_bytes(_fake_mp4(0))
+    assert dates.quicktime_datetime(zero) is None
+
+    ancient = tmp_path / "ancient.mp4"
+    ancient.write_bytes(_fake_mp4(60))
+    assert dates.quicktime_datetime(ancient) is None
+
+    garbage = tmp_path / "garbage.mov"
+    garbage.write_bytes(b"\x00\x00\x00\x08free" + b"junk" * 3)
+    assert dates.quicktime_datetime(garbage) is None
+
+    avi = tmp_path / "clip.avi"
+    avi.write_bytes(_fake_mp4(1_000_000_000))
+    assert dates.quicktime_datetime(avi) is None
+
+
+def test_heic_exif_is_read(tmp_path):
+    import pytest
+    from PIL import Image
+
+    import picsort
+
+    if not picsort.HEIF_SUPPORTED:
+        pytest.skip("pillow-heif not installed")
+    exif = Image.Exif()
+    exif.get_ifd(0x8769)[0x9003] = "2024:02:03 04:05:06"
+    Image.new("RGB", (64, 64), (10, 200, 10)).save(tmp_path / "photo.heic", format="HEIF", exif=exif.tobytes())
+    assert dates.exif_datetime(tmp_path / "photo.heic") == datetime(2024, 2, 3, 4, 5, 6)
