@@ -32,3 +32,14 @@ def reveal_in_file_manager(path: str | Path) -> None:
         subprocess.Popen(["open", "-R", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path.parent)])
+
+
+def user_cache_dir(app_name: str = "PicSort") -> Path:
+    """Per-user cache folder following each platform's conventions."""
+    if IS_MAC:
+        base = Path.home() / "Library" / "Caches"
+    elif IS_WINDOWS:
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return base / app_name

@@ -4,7 +4,15 @@ import threading
 
 from PIL import Image, ImageDraw
 
-from picsort.similar import compute_hashes, find_images, group_similar, scan_folder
+import pytest
+
+from picsort import similar
+from picsort.similar import HashCache, compute_hashes, find_images, group_similar, scan_folder
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(similar, "user_cache_dir", lambda *_a: tmp_path / "cache")
 
 
 def _photo(path, seed: int, size=(160, 120)):
@@ -71,3 +79,50 @@ def test_progress_and_cancel(tmp_path):
     cancel = threading.Event()
     cancel.set()
     assert scan_folder(tmp_path, cancel_event=cancel) == []
+
+
+def test_cache_skips_rehashing_until_file_changes(tmp_path, monkeypatch):
+    for i in range(4):
+        _photo(tmp_path / f"{i}.jpg", seed=i + 1)
+    calls = []
+    real_hash = similar.hash_image
+    monkeypatch.setattr(similar, "hash_image", lambda p: calls.append(p) or real_hash(p))
+    cache_file = tmp_path / "cache" / "hashes.json"
+
+    first = compute_hashes(find_images(tmp_path), cache=HashCache(cache_file).load())
+    assert len(calls) == 4
+    assert cache_file.exists()
+
+    calls.clear()
+    cache = HashCache(cache_file).load()
+    second = compute_hashes(find_images(tmp_path), cache=cache)
+    assert calls == []
+    assert cache.hits == 4
+    assert second == first
+
+    import os
+    import time
+
+    changed = tmp_path / "2.jpg"
+    _photo(changed, seed=42)
+    os.utime(changed, (time.time() + 5, time.time() + 5))
+    calls.clear()
+    compute_hashes(find_images(tmp_path), cache=HashCache(cache_file).load())
+    assert calls == [changed]
+
+
+def test_corrupt_cache_file_is_ignored(tmp_path):
+    cache_file = tmp_path / "cache" / "hashes.json"
+    cache_file.parent.mkdir()
+    cache_file.write_text("{not json")
+    _photo(tmp_path / "a.jpg", seed=1)
+    hashes = compute_hashes(find_images(tmp_path), cache=HashCache(cache_file).load())
+    assert len(hashes) == 1
+    assert cache_file.read_text().startswith("{")
+
+
+def test_scan_folder_uses_default_cache_location(tmp_path):
+    _photo(tmp_path / "a.jpg", seed=1)
+    scan_folder(tmp_path)
+    assert (tmp_path / "cache" / "image_hashes.json").exists()
+    scan_folder(tmp_path, use_cache=False)
