@@ -27,5 +27,8 @@ picsort = "picsort.gui.app:main"
 [tool.setuptools.packages.find]
 include = ["picsort*"]
 
+[tool.setuptools.package-data]
+picsort = ["assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

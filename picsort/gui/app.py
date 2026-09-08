@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 
 from picsort import __version__
@@ -11,6 +12,20 @@ from picsort.gui.common import TaskRunner
 from picsort.gui.organizer_tab import OrganizerTab
 from picsort.gui.people_tab import PeopleTab
 from picsort.platform_utils import IS_MAC, IS_WINDOWS
+
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+
+
+def _set_icon(root: tk.Tk) -> None:
+    """Use the PicSort icon for the window (the .app/.exe bundle carries its own)."""
+    icon_file = ASSETS / "icon_256.png"
+    if not icon_file.exists():
+        return
+    try:
+        root._picsort_icon = tk.PhotoImage(file=str(icon_file))  # keep a reference alive
+        root.iconphoto(True, root._picsort_icon)
+    except tk.TclError:
+        pass
 
 
 def _apply_style(root: tk.Tk) -> None:
@@ -41,6 +56,7 @@ def main() -> None:
     root.geometry("1000x720")
     root.minsize(760, 520)
     _apply_style(root)
+    _set_icon(root)
     if IS_MAC:
         root.createcommand("tk::mac::Quit", root.destroy)
     root.bind_all("<Command-q>" if IS_MAC else "<Control-q>", lambda _e: root.destroy())
