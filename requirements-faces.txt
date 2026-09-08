@@ -1,0 +1,5 @@
+# Optional: needed only for the "People" tab. dlib requires a C++ toolchain.
+face_recognition
+scikit-learn
+numpy
+cmake

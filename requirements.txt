@@ -1,2 +1,5 @@
-Pillow
-imagehash
+Pillow>=10
+imagehash>=4.3
+numpy>=1.24
+send2trash>=1.8
+pillow-heif>=0.15

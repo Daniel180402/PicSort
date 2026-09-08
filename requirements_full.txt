@@ -1,4 +1,0 @@
-face_recognition
-scikit-learn
-numpy
-cmake

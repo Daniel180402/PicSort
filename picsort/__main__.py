@@ -1,4 +1,4 @@
-"""Launcher kept for backwards compatibility: ``python picsort.py``."""
+"""Allow running the app with ``python -m picsort``."""
 
 from picsort.gui.app import main
 
