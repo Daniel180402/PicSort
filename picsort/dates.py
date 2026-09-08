@@ -19,6 +19,7 @@ IMAGE_EXTENSIONS = {
 VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".avi", ".mkv", ".3gp", ".mts", ".wmv"}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 _QUICKTIME_EXTENSIONS = {".mp4", ".m4v", ".mov", ".3gp"}
+_SPOTLIGHT_EXTENSIONS = VIDEO_EXTENSIONS - _QUICKTIME_EXTENSIONS
 _QUICKTIME_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
 
 # EXIF tag ids, see https://exiftool.org/TagNames/EXIF.html
@@ -115,8 +116,12 @@ def quicktime_datetime(path: Path) -> datetime | None:
 
 
 def spotlight_datetime(path: Path) -> datetime | None:
-    """Ask macOS Spotlight for the content creation date (macOS only)."""
-    if not IS_MAC:
+    """Ask macOS Spotlight for the content creation date (macOS only).
+
+    Spawning ``mdls`` costs about 30 ms per file, so this is only used for
+    video formats PicSort cannot read itself.
+    """
+    if not IS_MAC or path.suffix.lower() not in _SPOTLIGHT_EXTENSIONS:
         return None
     try:
         result = subprocess.run(
@@ -148,8 +153,8 @@ def filesystem_datetime(path: Path) -> datetime:
 def get_creation_date(path: str | Path) -> datetime:
     """Return the most trustworthy date available for a media file.
 
-    Order: EXIF (photos), embedded creation time (videos), macOS Spotlight,
-    file system timestamps.
+    Order: EXIF (photos), embedded creation time (videos), macOS Spotlight
+    (other videos), file system timestamps.
     """
     path = Path(path)
     ext = path.suffix.lower()
