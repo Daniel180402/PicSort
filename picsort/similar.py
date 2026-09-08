@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -19,6 +20,10 @@ from picsort.platform_utils import user_cache_dir
 ProgressCallback = Callable[[int, int, str], None]
 
 DEFAULT_THRESHOLD = 5
+HASH_SIZE = 8
+# dhash only needs a 9x8 picture, so JPEGs are decoded at reduced scale (up to 8x fewer pixels).
+_DRAFT_SIZE = (HASH_SIZE * 16, HASH_SIZE * 16)
+_WORKERS = max(2, min(8, (os.cpu_count() or 2)))
 _HASHABLE_EXTENSIONS = IMAGE_EXTENSIONS - {".dng", ".cr2", ".nef", ".arw", ".orf", ".raf"}
 _POPCOUNT = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
 
@@ -46,7 +51,8 @@ def find_images(folder: str | Path) -> list[Path]:
 def hash_image(path: Path) -> imagehash.ImageHash | None:
     try:
         with Image.open(path) as img:
-            return imagehash.dhash(img)
+            img.draft("L", _DRAFT_SIZE)  # fast path for JPEG: decode a downscaled version
+            return imagehash.dhash(img, hash_size=HASH_SIZE)
     except Exception:  # noqa: BLE001 - corrupt or unsupported image
         return None
 
@@ -58,8 +64,8 @@ class HashCache:
     modification time changes.
     """
 
-    def __init__(self, path: Path | None = None) -> None:
-        self.path = path or user_cache_dir() / "image_hashes.json"
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = Path(path) if path else user_cache_dir() / "image_hashes.json"
         self._entries: dict[str, dict] = {}
         self._dirty = False
         self.hits = 0
@@ -116,20 +122,48 @@ def compute_hashes(
     cancel_event: threading.Event | None = None,
     cache: HashCache | None = None,
 ) -> dict[Path, imagehash.ImageHash]:
+    """Hash all images, using cached values where possible and several threads otherwise.
+
+    Pillow releases the GIL while decoding, so a thread pool gives a real speed-up
+    without the overhead of extra processes.
+    """
     hashes: dict[Path, imagehash.ImageHash] = {}
+    total = len(paths)
+    done = 0
+
+    def report(name: str) -> None:
+        nonlocal done
+        done += 1
+        if progress and (done % 10 == 0 or done == total):
+            progress(done, total, name)
+
+    def cancelled() -> bool:
+        return bool(cancel_event and cancel_event.is_set())
+
+    def worker(path: Path) -> tuple[Path, imagehash.ImageHash | None]:
+        if cancelled():
+            return path, None
+        return path, hash_image(path)
+
+    pending: list[Path] = []
+    for path in paths:
+        cached = cache.get(path) if cache else None
+        if cached is not None:
+            hashes[path] = cached
+            report(path.name)
+        else:
+            pending.append(path)
+
     try:
-        for index, path in enumerate(paths, start=1):
-            if cancel_event and cancel_event.is_set():
-                break
-            hashed = cache.get(path) if cache else None
-            if hashed is None:
-                hashed = hash_image(path)
-                if hashed is not None and cache:
-                    cache.put(path, hashed)
-            if hashed is not None:
-                hashes[path] = hashed
-            if progress and (index % 10 == 0 or index == len(paths)):
-                progress(index, len(paths), path.name)
+        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+            for path, hashed in pool.map(worker, pending):
+                if hashed is not None:
+                    hashes[path] = hashed
+                    if cache:
+                        cache.put(path, hashed)
+                report(path.name)
+                if cancelled():
+                    break
     finally:
         if cache:
             cache.save()
